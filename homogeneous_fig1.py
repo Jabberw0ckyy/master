@@ -4,7 +4,7 @@ from bdg_core import (square_lattice, g_t, g_sxy, g_sz_bond_and_derivs, diagonal
                        g_t_dn, g_sxy_dn, g_sz_bond_dn_i)
 
 # ---------------------------------------------------------------- params --
-Lx, Ly = 8, 8 
+Lx, Ly = 16, 16 
 t, tp, J = 1.0, -0.25, 0.3
 N, nn_bonds, nnn_bonds = square_lattice(Lx, Ly)
 xs = np.array([i % Lx for i in range(N)])
@@ -219,7 +219,7 @@ if __name__ == "__main__":
     deltas = np.arange(0.02, 0.26, 0.01)
     m_ours, Delta_ours, chi_ours = [], [], []
     seed = None
-    print("Running self-consistency scan (this takes a few minutes)...")
+    print("Running self-consistency")
     for d in deltas:
         res = solve_at_doping(d, seed=seed)
         seed = (res['m'] if res['m'] > 1e-3 else 0.05, res['chi'],
@@ -254,8 +254,7 @@ if __name__ == "__main__":
              label=r"$\Delta$ (paper, digitized)")
     ax.set_xlabel(r"doping $\delta$")
     ax.set_ylabel("order parameter")
-    ax.set_title("Homogeneous Gutzwiller-BdG solution vs. Fig. 1\n"
-                 "(solid = this code, dashed = paper)")
+    ax.set_title("Homogeneous Gutzwiller-BdG solution vs. Fig. 1\n")
     ax.legend(fontsize=8)
     ax.set_xlim(0, 0.26)
     ax.set_ylim(0, 0.30)
