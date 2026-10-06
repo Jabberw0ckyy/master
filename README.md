@@ -21,6 +21,40 @@ Lx, Ly = 24, 24                 # lattice size (periodic boundary conditions)
 `J/t = 0.3` and `t'/t = -0.25` are values for YBCO/LSCO-like
 cuprates.
 
+## Repository structure
+
+```text
+    ├── README.md
+    ├── archive-kagome/
+    │   └── kagome_delta_sweep.py
+    └── gutzwiller-bdg-tj/
+        ├── bdg/
+        │   ├── lattice.py
+        │   ├── solve_disordered.py
+        │   ├── solve_homogeneous.py
+        │   └── solve_strong_disordered.py
+        ├── data/
+        │   ├── type1_delta0.115_T0.1.pkl
+        │   ├── type1_delta0.125_T0.1.pkl
+        │   ├── type1_delta0.130_T0.1.pkl
+        │   ├── type1_delta0.135_T0.1.pkl
+        │   ├── type1_delta0.145_T0.1.pkl
+        │   ├── type1_delta0.155_T0.1.pkl
+        │   ├── type2_panela_n1pct_delta0.140.pkl
+        │   ├── type2_panelb_n2pct_delta0.140.pkl
+        │   ├── type2_panelc_n1pct_delta0.150.pkl
+        │   └── type2_paneld_n2pct_delta0.150.pkl
+        ├── ldos/
+        │   ├── boker_continuum.py
+        │   ├── continuum.py
+        │   └── wannier.py
+        └── tests/
+            ├── check_continuum_vs_paper.py
+            ├── diagnose_eigenvalues.py
+            ├── diagnose_oscillation.py
+            └── fig 3 oscillation diagnostic.py
+```
+
 lattice.py
 - lay out the lattice and its bonds
 - compute the Gutzwiller renormalization factors from local density and magnetism
