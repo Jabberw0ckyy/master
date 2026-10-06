@@ -15,9 +15,16 @@ from lattice import g_t, g_sxy, diagonalize_bdg_real, g_sz_bond_vec
 from solve_disordered import (
     N, Lx, Ly, xs, ys, t, tp, J,
     nn_i, nn_j, nn_sign, nnn_i, nnn_j,
-    afm_field,
+    build_hamiltonian,
 )
 from wannier import wannier_envelope, plot_wannier
+
+
+def _unique(fname):
+    """../data/<name>_<time stamp>.<ext>: figures never overwrite each other."""
+    import time
+    base, ext = os.path.splitext(fname)
+    return os.path.join(_DATA_DIR, f"{base}_{time.strftime('%Y%m%d-%H%M%S')}{ext}")
 
 
 def lorentzian(x, eta):
@@ -80,47 +87,20 @@ def continuum_ldos_map(rx_grid, ry_grid, xs_, ys_, E, psi, N_, omega, eta=0.02,
     return out.reshape(shape)
 
 
+def _v2_state(res):
+    if 'chi_up' in res:
+        return dict(delta_i=res['delta_i'], m_i=res['m_i'], chi_up=res['chi_up'], chi_dn=res['chi_dn'],
+                    Delta_nn=res['Delta_nn'], chin_up=res['chin_up'], chin_dn=res['chin_dn'],
+                    mu=res['mu'])
+    chi_nnn = np.broadcast_to(res['chi_nnn'], (len(nnn_i),)).copy()
+    return dict(delta_i=res['delta_i'], m_i=res['m_i'], chi_up=res['chi_nn'], chi_dn=res['chi_nn'],
+                Delta_nn=res['Delta_nn'], chin_up=chi_nnn, chin_dn=chi_nnn, mu=res['mu'])
+
+
 def rebuild_bdg_from_result(res, V_i):
-    delta_i = res['delta_i']
-    m_i = res['m_i']
-    chi_nn = res['chi_nn']
-    Delta_nn = res['Delta_nn']
-    chi_nnn = res['chi_nnn']
+    s = _v2_state(res)
+    H0up, H0dn, Deltamat = build_hamiltonian(s, V_i)
     mu = res['mu']
-
-    gsxy_i = g_sxy(delta_i, m_i)
-    gt_up = g_t(delta_i, m_i, +1)
-    gt_dn = g_t(delta_i, m_i, -1)
-
-    gsz_nn = g_sz_bond_vec(delta_i[nn_i], delta_i[nn_j], m_i[nn_i], m_i[nn_j],
-                            Delta_nn, chi_nn, gsxy_i[nn_i], gsxy_i[nn_j])
-    gsxy_nn = gsxy_i[nn_i] * gsxy_i[nn_j]
-
-    exch_hop = J * (0.25 * gsz_nn + 0.5 * gsxy_nn) * chi_nn
-    exch_pair = J * (0.25 * gsz_nn + 0.5 * gsxy_nn) * Delta_nn
-
-    hop_up = -(gt_up[nn_i] * gt_up[nn_j]) * t - exch_hop
-    hop_dn = -(gt_dn[nn_i] * gt_dn[nn_j]) * t - exch_hop
-    hop_up_nnn = -(gt_up[nnn_i] * gt_up[nnn_j]) * tp
-    hop_dn_nnn = -(gt_dn[nnn_i] * gt_dn[nnn_j]) * tp
-
-    H0up = np.zeros((N, N))
-    H0dn = np.zeros((N, N))
-    H0up[nn_i, nn_j] += hop_up; H0up[nn_j, nn_i] += hop_up
-    H0dn[nn_i, nn_j] += hop_dn; H0dn[nn_j, nn_i] += hop_dn
-    H0up[nnn_i, nnn_j] += hop_up_nnn; H0up[nnn_j, nnn_i] += hop_up_nnn
-    H0dn[nnn_i, nnn_j] += hop_dn_nnn; H0dn[nnn_j, nnn_i] += hop_dn_nnn
-
-    h_up = afm_field(delta_i, m_i, gsxy_i, chi_nn, Delta_nn, chi_nnn, +1.0)
-    h_dn = afm_field(delta_i, m_i, gsxy_i, chi_nn, Delta_nn, chi_nnn, -1.0)
-
-    np.fill_diagonal(H0up, H0up.diagonal() + h_up + V_i)
-    np.fill_diagonal(H0dn, H0dn.diagonal() + h_dn + V_i)
-
-    Deltamat = np.zeros((N, N))
-    Deltamat[nn_i, nn_j] += nn_sign * exch_pair
-    Deltamat[nn_j, nn_i] += nn_sign * exch_pair
-
     E, psi = diagonalize_bdg_real(H0up - mu * np.eye(N), H0dn - mu * np.eye(N), Deltamat)
     return H0up, H0dn, Deltamat, E, psi
 
@@ -252,14 +232,14 @@ def run_demo(omega_map=-0.28):
     psi_d = rng.randn(2 * N_d, 2 * N_d) * 0.1
 
     cu_x, cu_y = np.meshgrid(np.arange(1, 8), np.arange(1, 8))
-    plot_wannier(save_path=os.path.join(_DATA_DIR, "fig_ldos_wannier.png"))
+    plot_wannier(save_path=_unique("fig_ldos_wannier.png"))
     plot_ldos_map(E_d, psi_d, xs_d, ys_d, N_d, omega_map,
                   window=(1.5, 6.5, 1.5, 6.5), Lx_=6.0, Ly_=6.0,
                   cu_x=cu_x.ravel(), cu_y=cu_y.ravel(),
-                  save_path=os.path.join(_DATA_DIR, "fig_ldos_map.png"))
+                  save_path=_unique("fig_ldos_map.png"))
     plot_ldos_spectra(E_d, psi_d, xs_d, ys_d, N_d, N_d // 2,
                       np.linspace(-0.6, 0.6, 300), Lx_=6.0, Ly_=6.0,
-                      save_path=os.path.join(_DATA_DIR, "fig_ldos_spectra.png"))
+                      save_path=_unique("fig_ldos_spectra.png"))
     plt.show()
 
 
@@ -283,13 +263,13 @@ def run_real(file_index=-1, omega_map=-0.28, omega_max=0.6, eta=0.02,
     win = (cx - half_window, cx + half_window, cy - half_window, cy + half_window)
     near = (np.abs(xs - cx) <= half_window + 1) & (np.abs(ys - cy) <= half_window + 1)
 
-    plot_wannier(save_path=os.path.join(_DATA_DIR, "fig_ldos_wannier.png"))
+    plot_wannier(save_path=_unique("fig_ldos_wannier.png"))
     plot_ldos_map(E, psi, xs, ys, N, omega_map, window=win, Lx_=Lx, Ly_=Ly,
                   cu_x=xs[near], cu_y=ys[near], eta=eta,
-                  save_path=os.path.join(_DATA_DIR, "fig_ldos_map_real.png"))
+                  save_path=_unique("fig_ldos_map_real.png"))
     plot_ldos_spectra(E, psi, xs, ys, N, site_idx,
                       np.linspace(-omega_max, omega_max, 300), eta=eta, Lx_=Lx, Ly_=Ly,
-                      save_path=os.path.join(_DATA_DIR, "fig_ldos_spectra_real.png"))
+                      save_path=_unique("fig_ldos_spectra_real.png"))
     plt.show()
 
 
@@ -320,7 +300,7 @@ def run_type1_maps():
 
     fig.colorbar(im, ax=axes, shrink=0.8, label=r"$\rho(r,\omega=0)$")
     fig.suptitle("Type I disorder: zero-bias continuum LDOS maps")
-    out_path = os.path.join(_DATA_DIR, "fig_ldos_type1.png")
+    out_path = _unique("fig_ldos_type1.png")
     plt.savefig(out_path, dpi=140)
     plt.show()
     print(f"saved {out_path}")
