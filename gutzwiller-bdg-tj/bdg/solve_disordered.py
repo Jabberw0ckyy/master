@@ -224,6 +224,7 @@ def solve_disordered(delta_target, V_i, seed=None, max_iter=300, mix=0.15, tol=1
     mu = s['mu']
     diff = np.inf
     mix_mu = mix if mix_mu is None else mix_mu
+    unphysical = False
     for it in range(max_iter):
         H0up, H0dn, Dm = build_hamiltonian(s, V_i, kappa)
         if not pairing:
@@ -287,12 +288,19 @@ def solve_disordered(delta_target, V_i, seed=None, max_iter=300, mix=0.15, tol=1
             print(f"    it={it:4d} diff={diff:.2e} (worst={max(diffs, key=diffs.get)}) "
                   f"<|m|>={np.mean(np.abs(s['m_i'])):.4f} <|D|>={np.mean(np.abs(s['Delta_nn'])):.4f} "
                   f"delta_i in [{s['delta_i'].min():+.3f},{s['delta_i'].max():.3f}] mu={mu:+.4f}")
+        if s['delta_i'].min() < DELTA_FLOOR:      # some site got n_i > 1 -> run has left the physical region
+            unphysical = True
+            if verbose:
+                print(f"    it={it:4d} ABORT: min delta_i = {s['delta_i'].min():+.3f} < {DELTA_FLOOR} "
+                      f"(site overfilled, n_i>1) -> unphysical, stopping this start")
+            break
         if diff < tol and it > 8:
             break
 
     out = dict(s)
     out.update(chi_nn=0.5 * (s['chi_up'] + s['chi_dn']), chi_nnn=0.5 * (s['chin_up'] + s['chin_dn']),
-               iters=it, diff=diff, T=T, pairing=pairing, delta_target=delta_target, V_i=V_i.copy())
+               iters=it, diff=diff, T=T, pairing=pairing, delta_target=delta_target, V_i=V_i.copy(),
+               unphysical=unphysical)
     return out
 
 
@@ -347,8 +355,12 @@ def bdg_expectation(H0up, H0dn, Deltamat, T=DEFAULT_T):
 # ================================================================ Type I / Type II drivers ===
 
 DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-DELTA_SHIFT = 0.045
-PAPER_DELTAS_FIG2 = (0.115, 0.125, 0.135, 0.145, 0.155, 0.165)
+# Clean AF boundary of THIS solver (~0.17) minus the paper's (~0.12): the solver doping that plays
+# the role of the paper's doping delta_paper is delta_paper + DELTA_SHIFT.
+# The impurity density, however, is always the paper's one (n_imp = delta_paper), i.e. d - shift.
+DELTA_SHIFT = 0.05
+DELTA_FLOOR = -0.02   # abort a run if any site gets delta_i below this (n_i > 1 is unphysical)
+PAPER_DELTAS_FIG2 = (0.115, 0.125, 0.13, 0.135, 0.145)
 
 
 def stamp():
@@ -362,32 +374,68 @@ def _seed_state(delta, m0):
     return st
 
 
-def solve_best(d, V_i, m0, max_iter, mix, tol, T, compare=True):
-    starts = (m0, 0.0) if compare else (m0,)
-    best = None
-    for m_start in starts:
+def solve_best(d, V_i, m0, max_iter, mix, tol, T, compare="auto", select="af"):
+    """Two possible starts: AF-seeded (m0) and paramagnetic (m=0).
+    select = "af"     -> show the AF-seeded self-consistent state whenever it is physical (n_i<=1), converged or not,
+                          like iterating from a Neel seed as in the paper; the paramagnet is only a fallback.
+                          The other start is run only if compare == "always" (or if the AF start was unphysical);
+                          its energy is then printed and attached to the title (metastability check).
+             "energy" -> show whichever PHYSICAL start has the lower energy.
+    compare = "auto"/"never" -> do not run the second start unless needed; "always" -> run both starts."""
+    if compare is True:
+        compare = "always"
+    elif compare is False:
+        compare = "never"
+    runs = []
+
+    def _run(m_start):
         r = solve_disordered(d, V_i, seed=_seed_state(d, m_start), max_iter=max_iter, mix=mix,
                              tol=tol, verbose=True, T=T)
         r['energy'] = free_energy_terms(r)
         r['m_start'] = m_start
-        print(f"    start m0={m_start:g}: E/N={r['energy']:.6f} <|m|>={np.mean(np.abs(r['m_i'])):.4f} diff={r['diff']:.2e}")
-        if best is None or r['energy'] < best['energy']:
-            best = r
+        conv = (r['diff'] < tol) and not r['unphysical']
+        status = "UNPHYSICAL (n_i>1)" if r['unphysical'] else ("CONVERGED" if conv else "not converged")
+        print(f"    start m0={m_start:g}: E/N={r['energy']:.6f} <|m|>={np.mean(np.abs(r['m_i'])):.4f} "
+              f"diff={r['diff']:.2e} it={r['iters'] + 1} {status}")
+        runs.append(r)
+        return r
+
+    first = _run(m0)
+    need_second = (compare == "always") or first['unphysical'] or (select == "energy" and compare != "never"
+                                                                   and first['diff'] >= tol)
+    second = _run(0.0) if need_second else None
+
+    cands = [r for r in (first, second) if r is not None]
+    phys = [r for r in cands if not r['unphysical']]
+    if select == "af" and not first['unphysical']:
+        best = first
+    elif phys:
+        best = min(phys, key=lambda r: r['energy'])
+    else:
+        best = min(cands, key=lambda r: r['energy'])
+    if second is not None and not first['unphysical'] and not second['unphysical']:
+        dE = first['energy'] - second['energy']          # >0: AF-seeded state has HIGHER energy than the paramagnet
+        best['note'] = f"E(AF)-E(para)={dE:+.1e}"
+        print(f"    energy check: E(AF-seeded) - E(paramagnet) = {dE:+.2e} per site "
+              f"({'AF is metastable' if dE > 0 else 'AF has the lower energy'})")
+    best['select'] = select
     return best
 
 
-def run_fig2(deltas, max_iter=3000, mix=0.15, seed_rng=1, T=DEFAULT_T, tol=1e-5, V=None, m0=0.12, compare=True):
+def run_fig2(deltas, max_iter=2000, mix=0.15, seed_rng=1, T=DEFAULT_T, tol=1e-5, V=None, m0=0.12,
+             compare="auto", imp_shift=DELTA_SHIFT, select="af"):
+    # impurity density = (solver doping) - imp_shift  (= the paper-equivalent doping), nested sets
     rng = np.random.default_rng(seed_rng)
-    n_imp_max = max(1, int(round(max(deltas) * N)))
+    n_imp_max = max(1, int(round((max(deltas) - imp_shift) * N)))
     all_sites = rng.choice(N, size=n_imp_max, replace=False)
     results = []
     for d in deltas:
-        n_imp = max(1, int(round(d * N)))
+        n_imp = max(1, int(round((d - imp_shift) * N)))
         imp_sites = all_sites[:n_imp]
         V_i = np.zeros(N)
         V_i[imp_sites] = t if V is None else V
         print(f"\n=== delta={d:.3f}  n_imp={n_imp}/{N}  V={V_i.max():g} ===")
-        res = solve_best(d, V_i, m0, max_iter, mix, tol, T, compare)
+        res = solve_best(d, V_i, m0, max_iter, mix, tol, T, compare, select)
         res.update(imp_sites=imp_sites, delta_target=d, n_imp_frac=n_imp / N, V_i=V_i.copy())
         results.append(res)
         print(f"delta={d:.3f} done: iters={res['iters']} diff={res['diff']:.3e} "
@@ -395,7 +443,7 @@ def run_fig2(deltas, max_iter=3000, mix=0.15, seed_rng=1, T=DEFAULT_T, tol=1e-5,
     return results
 
 
-def run_fig3(panels, V_strong_factor=100.0, max_iter=7000, mix=0.15, seed_rng=3, T=DEFAULT_T,
+def run_fig3(panels, V_strong_factor=100.0, max_iter=5000, mix=0.15, seed_rng=3, T=DEFAULT_T,
              tol=1e-5, m0=0.02):
     results = []
     for k, (n_imp_frac, d) in enumerate(panels):
@@ -420,10 +468,11 @@ def plot_panels(results, title):
     for ax, res in zip(axes, results):
         im = ax.imshow(res["m_i"].reshape(Ly, Lx), cmap="jet", vmin=-0.12, vmax=0.12, origin="lower")
         ax.scatter(res["imp_sites"] % Lx, res["imp_sites"] // Lx, c="k", s=35)
-        converged = "OK" if res["diff"] < 1e-4 else "not converged"
+        converged = "UNPHYSICAL n>1" if res.get("unphysical") else ("OK" if res["diff"] < 1e-4 else "not converged")
         ax.set_title(rf"$\delta={res['delta_target']:.3f}$"
                      rf"   $\langle|m|\rangle={np.mean(np.abs(res['m_i'])):.3f}$"
-                     f"\n{converged} (diff={res['diff']:.1e}, {res['iters'] + 1} it)", fontsize=9)
+                     f"\n{converged} (diff={res['diff']:.1e}, {res['iters'] + 1} it)"
+                     + (f"\n{res['note']}" if res.get("note") else ""), fontsize=9)
         ax.set_xticks([]); ax.set_yticks([])
     fig.colorbar(im, ax=axes, shrink=0.8, label=r"$m_i$")
     fig.suptitle(title)
@@ -445,7 +494,14 @@ if __name__ == "__main__":
     ap.add_argument("--tol", type=float, default=1e-5)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--m0", type=float, default=0.12, help="initial staggered m")
-    ap.add_argument("--no-compare", action="store_true", dest="no_compare")
+    ap.add_argument("--compare", choices=["auto", "always", "never"], default="auto",
+                    help="auto: 2nd start (m0=0) only if the 1st did not converge")
+    ap.add_argument("--select", choices=["af", "energy"], default="af",
+                    help="af: show the AF-seeded state if physical (default); energy: show the lower-energy physical state")
+    ap.add_argument("--no-compare", action="store_true", dest="no_compare", help="same as --compare never")
+    ap.add_argument("--imp-shift", type=float, default=DELTA_SHIFT, dest="imp_shift",
+                    help="impurity density = delta - imp_shift (default: DELTA_SHIFT); forced to 0 by --paper-dopings")
+    ap.add_argument("--V", type=float, default=None, dest="V", help="impurity potential (default: t)")
     ap.add_argument("--save", action="store_true", help="also write one result pickle per panel to ../data")
     a = ap.parse_args()
 
@@ -456,10 +512,13 @@ if __name__ == "__main__":
     else:
         deltas = tuple(round(d + DELTA_SHIFT, 4) for d in PAPER_DELTAS_FIG2)
 
-    results = run_fig2(deltas, max_iter=a.iters, mix=a.mix, seed_rng=a.seed, T=a.T, tol=a.tol, m0=a.m0, compare=not a.no_compare)
+    imp_shift = 0.0 if a.paper_dopings else a.imp_shift
+    compare = "never" if a.no_compare else a.compare
+    results = run_fig2(deltas, max_iter=a.iters, mix=a.mix, seed_rng=a.seed, T=a.T, tol=a.tol, m0=a.m0,
+                       compare=compare, imp_shift=imp_shift, V=a.V, select=a.select)
 
-    shift = "" if (a.deltas is not None or a.paper_dopings) else f", dopings shifted by +{DELTA_SHIFT}"
-    fig = plot_panels(results, f"Type I disorder, nested impurity sets, T={a.T}{shift}")
+    shift = "" if a.paper_dopings else f", delta shifted by +{imp_shift:g}, n_imp = delta-{imp_shift:g}"
+    fig = plot_panels(results, f"Type I disorder, nested impurity sets, T={a.T}, V={t if a.V is None else a.V:g}{shift}")
     os.makedirs(DATA, exist_ok=True)
     out = os.path.join(DATA, f"fig2_type1_maps_d{deltas[0]:g}-{deltas[-1]:g}_n{len(deltas)}"
                              f"_T{a.T:g}_it{a.iters}_s{a.seed}_{stamp()}.png")
@@ -467,7 +526,7 @@ if __name__ == "__main__":
     print("saved", out)
     if a.save:
         for res in results:
-            fname = os.path.join(DATA, f"type1_delta{res['delta_target']:.3f}_T{a.T}.pkl")
+            fname = os.path.join(DATA, f"type1_delta{res['delta_target']:.3f}_T{a.T}_V{t if a.V is None else a.V:g}.pkl")
             with open(fname, "wb") as f:
                 pickle.dump(res, f)
             print("saved", fname)
