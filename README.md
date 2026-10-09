@@ -61,14 +61,49 @@ lattice.py
 - turn a Hamiltonian matrix into energy levels
 
 solve_disordered.py
-- runs the actual self-consistency loop: guess an answer, compute what the physics predicts from that guess, nudge the guess toward the prediction, repeat until agreed. 
+- runs the self-consistency loop.
+- builds the mean-field Hamiltonian from the current guess
 - places impurities on the lattice.
+- plots Type I and Type II magnetization map
 
 continuum.py
 -takes an already converged answer from solve_disordered.py and caculates how this look under an STM tip
 
-## What might be problematic
-The Type I disorder scan hasn't really converged, (in and out of self-consistensy loop)
-//new_input = (1 - mix) * old_input + mix * output; then  DIIS/ Anderson mixing  (doesn't help)
-Introducing small finite temperature helped.
-But the paper says as well that their equations do misbehave close to half-filling/very low doping, for reasons built into their simplified formulas. they avoided testing that region.
+
+solve_homogeneous.py
+
+-solves uniform state with no impurities at each doping
+-scans doping and plots magnetization, kinetic term and pairing against the paper's Fig. 1 curves
+
+solve_strong_disordered.py
+
+-runs Type II magnetization maps (1% and 2% strong impurities, two dopings)
+-shifts the dopings to match where this model's antiferromagnetism ends, unless told otherwise
+
+uniform_k.py (to find where the antiferromagnetism disappears)
+
+-solves the clean uniform AF plus SC in k space in the infinite-lattice limit
+-same Hamiltonian as the real-space solver
+
+ldos/
+
+wannier.py
+
+-defines the shape of the orbital that the STM tip "sees" around each lattice site
+-plots shape
+
+boker_continuum.py
+
+-reproduces the Böker et al. approach for a d-wave SC with one impurity
+-computes spectra and conductance maps at any tip position, using the impurity scattering T-matrix and the Wannier orbital
+
+continuum.py
+
+-takes a converged result from the solver and rebuilds its energy levels
+-turns them into STM-like local density of states at any tip position: spectra at chosen points and maps at chosen bias
+
+af_impurity.py
+
+-treats the pure AF with a single impurity
+-computes the response via Green's functions and the impurity scattering, on an infinite lattice
+-produces STM spectra and maps near and far from the impurity, plus how the signal decays with distance
