@@ -1,0 +1,176 @@
+    it=  0 diff=9.99e-02 m=0.12002 chi=0.18454 mu=1.25122
+    it= 10 diff=2.49e-03 m=0.09304 chi=0.19396 mu=1.67102
+    it= 20 diff=1.81e-04 m=0.09468 chi=0.19406 mu=1.67059
+    it= 30 diff=1.80e-05 m=0.09487 chi=0.19405 mu=1.66997
+    it= 40 diff=1.75e-06 m=0.09489 chi=0.19405 mu=1.66990
+    it= 50 diff=1.70e-07 m=0.09489 chi=0.19405 mu=1.66990
+    it= 60 diff=1.66e-08 m=0.09489 chi=0.19405 mu=1.66989
+host: delta=0.15  m=0.09489  chi_nn=0.19405  mu=1.66989  iters=63  diff=8.2e-09
+=== d=0.15 V=0.1 ===
+host: delta=0.15  m=0.0949  mu=1.6699
+impurity V=0.1t on site (12,12); eta=0.01; infinite-lattice Nk=512
+max|rho_imp - rho_clean| / max rho_clean per tip (infinite lattice):
+  tip on impurity (0,0)  [zero by symmetry]    0.00e+00
+  nn (1,0)                                     2.29e-01
+  bond centre (0.5,0)                          9.12e-02
+  (2,0)                                        3.29e-02
+  (3,0)                                        4.50e-02
+  off-axis (2,1)                               1.09e-01
+  far (20,0), same sublattice                  3.75e-04
+  far (19,0), other sublattice                 3.81e-03
+  far bond centre (19.5,0)                     2.21e-03
+  far off-axis (18,6)                          4.66e-04
+  finite(24x24) vs infinite d-rho at nn (1,0)            : 7.37e-01
+  finite(24x24) vs infinite d-rho at bond centre (0.5,0) : 7.26e-01
+  finite(24x24) vs infinite d-rho at (2,0)               : 1.66e+00
+  finite(24x24) vs infinite d-rho at (3,0)               : 8.66e-01
+  finite(24x24) vs infinite d-rho at off-axis (2,1)      : 5.53e-01
+strongest impurity-induced peaks (omega/t): [-0.087 -0.047  0.24 ]
+  |drho|/rho_clean at (5,0), omega=-0.087: 1.28e-02
+  |drho|/rho_clean at (10,0), omega=-0.087: 7.39e-05
+  |drho|/rho_clean at (20,0), omega=-0.087: 7.79e-05
+  |drho|/rho_clean at (40,0), omega=-0.087: 4.10e-07
+=== d=0.15 V=0.25 ===
+host: delta=0.15  m=0.0949  mu=1.6699
+impurity V=0.25t on site (12,12); eta=0.01; infinite-lattice Nk=512
+max|rho_imp - rho_clean| / max rho_clean per tip (infinite lattice):
+  tip on impurity (0,0)  [zero by symmetry]    0.00e+00
+  nn (1,0)                                     4.24e-01
+  bond centre (0.5,0)                          1.67e-01
+  (2,0)                                        6.15e-02
+  (3,0)                                        7.19e-02
+  off-axis (2,1)                               1.77e-01
+  far (20,0), same sublattice                  8.03e-04
+  far (19,0), other sublattice                 7.63e-03
+  far bond centre (19.5,0)                     4.32e-03
+  far off-axis (18,6)                          1.02e-03
+  finite(24x24) vs infinite d-rho at nn (1,0)            : 8.17e-01
+  finite(24x24) vs infinite d-rho at bond centre (0.5,0) : 7.55e-01
+  finite(24x24) vs infinite d-rho at (2,0)               : 2.19e+00
+  finite(24x24) vs infinite d-rho at (3,0)               : 1.18e+00
+  finite(24x24) vs infinite d-rho at off-axis (2,1)      : 6.12e-01
+strongest impurity-induced peaks (omega/t): [-0.08  0.    0.24]
+  |drho|/rho_clean at (5,0), omega=-0.080: 3.18e-02
+  |drho|/rho_clean at (10,0), omega=-0.080: 1.23e-04
+  |drho|/rho_clean at (20,0), omega=-0.080: 5.87e-05
+  |drho|/rho_clean at (40,0), omega=-0.080: 1.44e-07
+=== d=0.15 V=0.5 ===
+host: delta=0.15  m=0.0949  mu=1.6699
+impurity V=0.5t on site (12,12); eta=0.01; infinite-lattice Nk=512
+max|rho_imp - rho_clean| / max rho_clean per tip (infinite lattice):
+  tip on impurity (0,0)  [zero by symmetry]    0.00e+00
+  nn (1,0)                                     5.47e-01
+  bond centre (0.5,0)                          2.14e-01
+  (2,0)                                        8.22e-02
+  (3,0)                                        8.18e-02
+  off-axis (2,1)                               2.13e-01
+  far (20,0), same sublattice                  1.89e-03
+  far (19,0), other sublattice                 1.01e-02
+  far bond centre (19.5,0)                     5.68e-03
+  far off-axis (18,6)                          1.63e-03
+  finite(24x24) vs infinite d-rho at nn (1,0)            : 5.36e-01
+  finite(24x24) vs infinite d-rho at bond centre (0.5,0) : 4.93e-01
+  finite(24x24) vs infinite d-rho at (2,0)               : 2.78e+00
+  finite(24x24) vs infinite d-rho at (3,0)               : 1.89e+00
+  finite(24x24) vs infinite d-rho at off-axis (2,1)      : 7.20e-01
+strongest impurity-induced peaks (omega/t): [-0.08   0.247  0.087]
+  |drho|/rho_clean at (5,0), omega=-0.080: 3.30e-02
+  |drho|/rho_clean at (10,0), omega=-0.080: 4.45e-04
+  |drho|/rho_clean at (20,0), omega=-0.080: 1.09e-04
+  |drho|/rho_clean at (40,0), omega=-0.080: 3.28e-07
+=== d=0.15 V=1 ===
+host: delta=0.15  m=0.0949  mu=1.6699
+impurity V=1.0t on site (12,12); eta=0.01; infinite-lattice Nk=512
+max|rho_imp - rho_clean| / max rho_clean per tip (infinite lattice):
+  tip on impurity (0,0)  [zero by symmetry]    0.00e+00
+  nn (1,0)                                     6.11e-01
+  bond centre (0.5,0)                          2.36e-01
+  (2,0)                                        1.99e-01
+  (3,0)                                        1.02e-01
+  off-axis (2,1)                               2.21e-01
+  far (20,0), same sublattice                  5.32e-03
+  far (19,0), other sublattice                 1.24e-02
+  far bond centre (19.5,0)                     9.83e-03
+  far off-axis (18,6)                          3.41e-03
+  finite(24x24) vs infinite d-rho at nn (1,0)            : 5.02e-01
+  finite(24x24) vs infinite d-rho at bond centre (0.5,0) : 5.04e-01
+  finite(24x24) vs infinite d-rho at (2,0)               : 1.79e+00
+  finite(24x24) vs infinite d-rho at (3,0)               : 1.59e+00
+  finite(24x24) vs infinite d-rho at off-axis (2,1)      : 6.36e-01
+strongest impurity-induced peaks (omega/t): [-0.08   0.247 -0.333]
+  |drho|/rho_clean at (5,0), omega=-0.080: 3.18e-02
+  |drho|/rho_clean at (10,0), omega=-0.080: 1.05e-03
+  |drho|/rho_clean at (20,0), omega=-0.080: 1.82e-04
+  |drho|/rho_clean at (40,0), omega=-0.080: 6.27e-07
+=== d=0.15 V=2 ===
+host: delta=0.15  m=0.0949  mu=1.6699
+impurity V=2.0t on site (12,12); eta=0.01; infinite-lattice Nk=512
+max|rho_imp - rho_clean| / max rho_clean per tip (infinite lattice):
+  tip on impurity (0,0)  [zero by symmetry]    0.00e+00
+  nn (1,0)                                     6.43e-01
+  bond centre (0.5,0)                          2.46e-01
+  (2,0)                                        1.28e-01
+  (3,0)                                        1.08e-01
+  off-axis (2,1)                               2.19e-01
+  far (20,0), same sublattice                  2.75e-03
+  far (19,0), other sublattice                 1.34e-02
+  far bond centre (19.5,0)                     9.54e-03
+  far off-axis (18,6)                          4.09e-03
+  finite(24x24) vs infinite d-rho at nn (1,0)            : 4.04e-01
+  finite(24x24) vs infinite d-rho at bond centre (0.5,0) : 4.11e-01
+  finite(24x24) vs infinite d-rho at (2,0)               : 2.74e+00
+  finite(24x24) vs infinite d-rho at (3,0)               : 1.90e+00
+  finite(24x24) vs infinite d-rho at off-axis (2,1)      : 6.64e-01
+strongest impurity-induced peaks (omega/t): [-0.08   0.247 -0.3  ]
+  |drho|/rho_clean at (5,0), omega=-0.080: 3.11e-02
+  |drho|/rho_clean at (10,0), omega=-0.080: 1.70e-03
+  |drho|/rho_clean at (20,0), omega=-0.080: 2.42e-04
+  |drho|/rho_clean at (40,0), omega=-0.080: 9.11e-07
+=== d=0.15 V=3 ===
+host: delta=0.15  m=0.0949  mu=1.6699
+impurity V=3.0t on site (12,12); eta=0.01; infinite-lattice Nk=512
+max|rho_imp - rho_clean| / max rho_clean per tip (infinite lattice):
+  tip on impurity (0,0)  [zero by symmetry]    0.00e+00
+  nn (1,0)                                     6.53e-01
+  bond centre (0.5,0)                          2.49e-01
+  (2,0)                                        1.26e-01
+  (3,0)                                        1.14e-01
+  off-axis (2,1)                               2.17e-01
+  far (20,0), same sublattice                  2.42e-03
+  far (19,0), other sublattice                 1.36e-02
+  far bond centre (19.5,0)                     9.42e-03
+  far off-axis (18,6)                          3.50e-03
+  finite(24x24) vs infinite d-rho at nn (1,0)            : 3.94e-01
+  finite(24x24) vs infinite d-rho at bond centre (0.5,0) : 3.99e-01
+  finite(24x24) vs infinite d-rho at (2,0)               : 3.03e+00
+  finite(24x24) vs infinite d-rho at (3,0)               : 1.86e+00
+  finite(24x24) vs infinite d-rho at off-axis (2,1)      : 6.48e-01
+strongest impurity-induced peaks (omega/t): [-0.08   0.247 -0.28 ]
+  |drho|/rho_clean at (5,0), omega=-0.080: 3.09e-02
+  |drho|/rho_clean at (10,0), omega=-0.080: 1.96e-03
+  |drho|/rho_clean at (20,0), omega=-0.080: 2.62e-04
+  |drho|/rho_clean at (40,0), omega=-0.080: 1.02e-06
+=== d=0.15 V=4 ===
+host: delta=0.15  m=0.0949  mu=1.6699
+impurity V=4.0t on site (12,12); eta=0.01; infinite-lattice Nk=512
+max|rho_imp - rho_clean| / max rho_clean per tip (infinite lattice):
+  tip on impurity (0,0)  [zero by symmetry]    0.00e+00
+  nn (1,0)                                     6.56e-01
+  bond centre (0.5,0)                          2.50e-01
+  (2,0)                                        1.27e-01
+  (3,0)                                        1.17e-01
+  off-axis (2,1)                               2.16e-01
+  far (20,0), same sublattice                  2.52e-03
+  far (19,0), other sublattice                 1.37e-02
+  far bond centre (19.5,0)                     9.39e-03
+  far off-axis (18,6)                          3.28e-03
+  finite(24x24) vs infinite d-rho at nn (1,0)            : 3.94e-01
+  finite(24x24) vs infinite d-rho at bond centre (0.5,0) : 3.94e-01
+  finite(24x24) vs infinite d-rho at (2,0)               : 2.95e+00
+  finite(24x24) vs infinite d-rho at (3,0)               : 1.83e+00
+  finite(24x24) vs infinite d-rho at off-axis (2,1)      : 6.34e-01
+strongest impurity-induced peaks (omega/t): [-0.08   0.247  0.973]
+  |drho|/rho_clean at (5,0), omega=-0.080: 3.08e-02
+  |drho|/rho_clean at (10,0), omega=-0.080: 2.09e-03
+  |drho|/rho_clean at (20,0), omega=-0.080: 2.70e-04
+  |drho|/rho_clean at (40,0), omega=-0.080: 1.07e-06
