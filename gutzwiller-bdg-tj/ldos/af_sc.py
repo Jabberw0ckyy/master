@@ -1,5 +1,3 @@
-"""af_sc.py: single non-magnetic impurity in the doped antiferromagnet, STM spectra with a responsive host.
-Run with -h for all options."""
 import os
 import sys
 import time
@@ -80,7 +78,7 @@ def embed_spectra(host, perts, tip, omegas, eta, Nk, c):
     return rho, rho_cl
 
 
-def embed_map(host, perts, omega, eta, Nk, c, half, sub, cells=5):
+def embed_map(host, perts, omega, eta, Nk, c, half, sub, cells=5, spin_diff=False):
     prm = af.host_tb_params(host)
     C_pos, C_a = cluster(c)
     eye = np.eye(len(C_pos))
@@ -109,8 +107,9 @@ def embed_map(host, perts, omega, eta, Nk, c, half, sub, cells=5):
                     Npos = np.stack([RX[ir] + gx + DX, RY[ir] + gy + DY], 1)
                     Na = (Npos[:, 0] + Npos[:, 1]) % 2
                     W = g0_pairs(Npos, Na, C_pos, C_a, gAA, gBB, gAB, Nk).T @ K
+                    sgn = -1.0 if (spin_diff and spin == "dn") else 1.0
                     for k in perts:
-                        out[k][ir, sel] += -np.einsum("ks,kl,ls->s", W, Ts[k], W).imag / np.pi
+                        out[k][ir, sel] += sgn * (-np.einsum("ks,kl,ls->s", W, Ts[k], W).imag / np.pi)
 
     def to_img(a):
         return a.reshape(nR, nR, sub, sub).transpose(1, 3, 0, 2).reshape(nR * sub, nR * sub)
@@ -267,9 +266,6 @@ def _predict(sols, good, V):
 
 
 def continue_to(emb, sols, meta, V_target, args, fn):
-    """Walk the solution branch from the nearest converged V below V_target up to V_target.
-    On failure the step is halved (down to --dV_min) with a secant predictor; if that also fails
-    the end of the branch is recorded in meta['branch_end'] = (last converged V, first failed V)."""
     ok = lambda v: sols[v]["resid"] < args.tol * 2
     good = sorted(v for v in sols if ok(v))
     if V_target in sols and ok(V_target):
@@ -318,7 +314,6 @@ FIN_KEYS = ["delta_i", "m_i", "chi_up", "chi_dn", "chin_up", "chin_dn"]
 
 
 class FiniteLattice:
-    """Full 24x24 Gutzwiller mean-field model with one impurity (the map used by af_newton.py)."""
 
     def __init__(self, host, delta, T):
         self.delta, self.T = delta, T
@@ -476,12 +471,12 @@ def run_poles(args, host, states, emb_c):
             gAA, gBB, gAB = af.host_green_real(prm, sp, w + 3e-3j, 512)
             rho[n] += -(gAA[0, 0].imag + gBB[0, 0].imag) / (2 * np.pi)
     k = np.where((om > 0.12) & (om < 0.45))[0]
-    low = k[rho[k] < 0.01 * rho.max()]
+    low = k[rho[k] < args.gap_thresh * rho.max()]
     if len(low) == 0:
         print("\nBOUND-STATE TEST: the clean host has no empty gap region at this doping (host LDOS never below 1% of its peak); skipped")
         return
     lo, hi = om[low.min()], om[low.max()]
-    print(f"\nBOUND-STATE TEST  clean gap region (host LDOS < 1% of its peak): [{lo:.3f}, {hi:.3f}]t")
+    print(f"\nBOUND-STATE TEST  gap region (clean host LDOS < {args.gap_thresh * 100:g}% of its peak): [{lo:.3f}, {hi:.3f}]t")
     oms = np.arange(lo + 0.004, hi - 0.004, args.d_om)
     G = {}
     for sp in ("up", "dn"):
@@ -519,6 +514,19 @@ def run_poles(args, host, states, emb_c):
         print(f"{V:6.3f} | {s_txt:>24} {s_mar:>8} | {(', '.join(f'{a}:{b:.3f}' for a, b in fp) or 'none'):>22} {f(mf):>8}")
 
 
+def mag_map(host, emb_c, dh, half, sub):
+    corr = emb_c.delta_corr(dh)
+    M = corr["up"] - corr["dn"]
+    M = 0.5 * (M + M.T)
+    n = (2 * half + 1) * sub
+    xs_ = np.linspace(-half - 0.5 + 0.5 / sub, half + 0.5 - 0.5 / sub, n)
+    X, Y = np.meshgrid(xs_, xs_)
+    P = np.stack([X.ravel(), Y.ravel()], 1)
+    W = wannier_envelope(P[:, None, 0] - emb_c.pos[None, :, 0], P[:, None, 1] - emb_c.pos[None, :, 1], gamma=af.GAMMA)
+    val = np.einsum("pi,ij,pj->p", W, M, W)
+    return val.reshape(n, n), [-half - 0.5, half + 0.5, -half - 0.5, half + 0.5]
+
+
 # ====================================================================== plots
 def _ax_off(ax):
     ax.set_xticks([])
@@ -530,7 +538,7 @@ def _ax_off(ax):
 def plot_stack(args, host, states, dhs, emb_c):
     import matplotlib.pyplot as plt
     Vs = sorted(args.Vs)
-    wmax = 1.5 if args.wmax is None else args.wmax
+    wmax = 1.0 if args.wmax is None else args.wmax
     wmin = -wmax if args.wmin is None else args.wmin
     omegas = np.linspace(wmin, wmax, args.n_omega)
     tip = tuple(args.tip)
@@ -540,8 +548,8 @@ def plot_stack(args, host, states, dhs, emb_c):
     rho, rho_cl = embed_spectra(host, perts, tip, omegas, args.eta, args.Nk, C)
     have = sorted(states)
     side = set(args.side)
-    maps, oms, ext = {}, {}, None
-    if "map" in side:
+    maps, smaps, oms, ext = {}, {}, {}, None
+    if "map" in side or "spin" in side:
         win = (omegas >= args.pmin) & (omegas <= args.pmax)
         for V in Vs:
             if args.omega is not None:
@@ -552,25 +560,46 @@ def plot_stack(args, host, states, dhs, emb_c):
             mp = {"fr": perts[("fr", V)]}
             if V in states:
                 mp["sc"] = dhs[V]
-            maps[V], ext = embed_map(host, mp, oms[V], args.eta, args.Nk, C, args.half, args.sub)
+            if "map" in side:
+                maps[V], ext = embed_map(host, mp, oms[V], args.eta, args.Nk, C, args.half, args.sub)
+            if "spin" in side:
+                smaps[V], ext = embed_map(host, mp, oms[V], args.eta, args.Nk, C, args.half, args.sub, spin_diff=True)
             print(f"   map V={V:g}: omega = {oms[V]:+.3f}t", flush=True)
+    mmaps = {}
+    if "mag" in side:
+        for V in Vs:
+            mm = {"fr": mag_map(host, emb_c, perts[("fr", V)], args.half, args.sub)[0]}
+            if V in states:
+                mm["sc"] = mag_map(host, emb_c, dhs[V], args.half, args.sub)[0]
+            mmaps[V] = mm
+        ext_mag = [-args.half - 0.5, args.half + 0.5, -args.half - 0.5, args.half + 0.5]
     obs = {V: observables(host, states[V]["st"]) for V in states}
     cols = []
     if "map" in side:
         cols += ["fmap", "smap"]
+    if "spin" in side:
+        cols += ["fspin", "sspin"]
+    if "mag" in side:
+        cols += ["fmag", "smag"]
     cols += ["spec"]
     cols += [c for c in ("dm", "dd") if c in side]
-    wr = {"fmap": 1.3, "smap": 1.3, "spec": 3.4, "dm": 1.3, "dd": 1.3}
-    nrow = len(Vs) + 1
-    fig = plt.figure(figsize=(sum(wr[c] for c in cols) * 1.9 + 0.8, 1.35 * nrow + 1.2))
-    gs = fig.add_gridspec(nrow, len(cols), width_ratios=[wr[c] for c in cols], hspace=0.0, wspace=0.12,
-                          left=0.03, right=0.98, top=0.92, bottom=0.08)
+    wr = {"fmap": 1.3, "smap": 1.3, "fspin": 1.3, "sspin": 1.3, "fmag": 1.3, "smag": 1.3, "spec": 3.4, "dm": 1.3, "dd": 1.3}
+    nrow = len(Vs)
+    rh, sw = args.row_h, args.spec_w
+    nsq = len([c for c in cols if c != "spec"])
+    fig_w, fig_h = nsq * rh + sw + 1.0, nrow * rh + 1.0
+    fig = plt.figure(figsize=(fig_w, fig_h))
+    wr = {c: (sw if c == "spec" else rh) for c in cols}
+    gs = fig.add_gridspec(nrow, len(cols), width_ratios=[wr[c] for c in cols], hspace=0.0, wspace=args.wspace,
+                          left=0.25 / fig_w, right=1 - 0.15 / fig_w, top=1 - 0.55 / fig_h, bottom=0.45 / fig_h)
     ymax = 1.08 * max(max(rho[("fr", V)].max() for V in Vs), max([rho[("sc", V)].max() for V in have] + [0]), rho_cl.max())
     ispec = cols.index("spec")
-    titles = {"fmap": r"frozen host: $\Delta\rho(r)$", "smap": r"self-consistent: $\Delta\rho(r)$",
+    titles = {"fmap": r"froz: $\Delta\rho(r)$", "smap": r"SC $\Delta\rho(r)$",
+              "fmag": r"froz: $\Delta s_z(r)$", "smag": r"SC $\Delta s_z(r)$",
+              "fspin": r"froz: $\Delta(\rho_\uparrow-\rho_\downarrow)$", "sspin": r"SC $\Delta(\rho_\uparrow-\rho_\downarrow)$",
               "dm": r"$\Delta m_{stag}$ per site", "dd": r"$\Delta\delta$ per site"}
     for row in range(nrow):
-        V = Vs[nrow - 2 - row] if row < nrow - 1 else None
+        V = Vs[nrow - 1 - row]
         for ic, c in enumerate(cols):
             ax = fig.add_subplot(gs[row, ic])
             if row == 0 and c in titles:
@@ -581,13 +610,13 @@ def plot_stack(args, host, states, dhs, emb_c):
                     ax.plot(omegas, rho_cl, "r:", lw=1.4)
                     ax.text(0.99, 0.85, "V=0 (clean)", transform=ax.transAxes, ha="right", fontsize=9, color="r")
                 else:
-                    ax.plot(omegas, rho_cl, "r:", lw=0.8)
+                    ax.plot(omegas, rho_cl, "r:", lw=1.0, label="clean (V=0)")
                     ax.plot(omegas, rho[("fr", V)], color="tab:blue", lw=1.0, label="frozen host")
                     if V in states:
                         ax.plot(omegas, rho[("sc", V)], "k", lw=1.3, label="self-consistent")
-                    lab = f"V={V:g}t" + ("" if V in states else "  (no self-consistent state)")
+                    lab = f"V={V:g}t" + ("" if V in states else "  no self-consistent state")
                     ax.text(0.99, 0.85, lab, transform=ax.transAxes, ha="right", fontsize=9)
-                    if "map" in side:
+                    if oms:
                         ax.axvline(oms[V], color="0.6", lw=0.6, ls="--")
                     if row == 0:
                         ax.legend(fontsize=7, loc="upper left")
@@ -599,17 +628,26 @@ def plot_stack(args, host, states, dhs, emb_c):
                 else:
                     ax.set_xlabel(r"bias $\omega/t$")
                 continue
-            if V is None or (c in ("smap", "dm", "dd") and V not in states):
+            if V is None or (c in ("smap", "sspin", "smag", "dm", "dd") and V not in states):
                 ax.axis("off")
                 continue
-            if c in ("fmap", "smap"):
-                img = maps[V]["fr" if c == "fmap" else "sc"]
-                v = max(np.abs(maps[V][k]).max() for k in maps[V])
+            if c in ("fmag", "smag"):
+                img = mmaps[V]["fr" if c == "fmag" else "sc"]
+                v = max(np.abs(mmaps[V][k]).max() for k in mmaps[V])
+                ax.imshow(img, extent=ext_mag, origin="lower", cmap="PRGn", vmin=-v, vmax=v)
+                ax.plot(0, 0, "k+", ms=8)
+                ax.plot(args.tip[0], args.tip[1], "gx", ms=5)
+                _ax_off(ax)
+                ax.text(0.97, 0.03, f"max {v:.3f}", transform=ax.transAxes, ha="right", fontsize=6)
+            elif c in ("fmap", "smap", "fspin", "sspin"):
+                src = maps if c in ("fmap", "smap") else smaps
+                img = src[V]["fr" if c in ("fmap", "fspin") else "sc"]
+                v = max(np.abs(src[V][k]).max() for k in src[V])
                 ax.imshow(img, extent=ext, origin="lower", cmap="bwr", vmin=-v, vmax=v)
                 ax.plot(0, 0, "k+", ms=8)
                 ax.plot(args.tip[0], args.tip[1], "gx", ms=5)
                 _ax_off(ax)
-                if c == "fmap":
+                if c in ("fmap", "fspin"):
                     ax.text(0.03, 0.95, rf"$\omega={oms[V]:+.3f}t$", transform=ax.transAxes, va="top", fontsize=7)
             else:
                 img = site_image(obs[V], c, args.site_half)
@@ -621,7 +659,7 @@ def plot_stack(args, host, states, dhs, emb_c):
     fig.suptitle(rf"nn tip ({tip[0]:g},{tip[1]:g}), $\delta={args.delta:g}$, $T={args.T:g}$, $\eta={args.eta:g}$, $N_k={args.Nk}$, "
                  f"method: {args.method}, cluster half-width {C}", fontsize=9)
     fn = os.path.join(_DATA_DIR, f"afsc_stack_{args.method}_d{args.delta:.3f}_{time.strftime('%Y%m%d-%H%M%S')}.png")
-    fig.savefig(fn, dpi=140)
+    fig.savefig(fn, dpi=140, bbox_inches="tight", pad_inches=0.1)
     print("saved", fn)
 
 
@@ -694,22 +732,19 @@ def plot_profiles(args, host, states):
 # ====================================================================== main
 def main():
     ap = argparse.ArgumentParser(
-        description="Single non-magnetic impurity in the doped AF (Gutzwiller t-J), STM spectra with a responsive host.\n"
-                    "One command does everything: solve the self-consistent states (cached, resumable), then draw what you ask for.\n"
-                    "Example: python af_sc.py --delta 0.10 --Vs 0.1 0.25 0.5 --side map dm dd --show stack summary poles",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_argument_group("physics")
     g.add_argument("--delta", type=float, default=0.10, help="hole doping")
     g.add_argument("--T", type=float, default=0.02)
-    g.add_argument("--Vs", type=float, nargs="+", default=[0.1, 0.25, 0.5, 0.75, 1.0, 2.0], help="impurity potentials (units of t)")
+    g.add_argument("--Vs", type=float, nargs="+", default=[0.1, 0.25, 0.5, 0.75, 1.0, 2.0], help="impurity potentials units of t")
     g.add_argument("--method", choices=["embed", "finite"], default="embed",
-                   help="embed: self-consistent cluster inside the infinite clean host (fast, cluster-size limited); "
-                        "finite: full 24x24 lattice, Newton-Krylov (slow, stronger response)")
+                   help="embed: self-consistent cluster inside the infinite clean host; "
+                        "finite: full 24x24 lattice, Newton-Krylov")
     g = ap.add_argument_group("what to draw")
     g.add_argument("--show", nargs="+", default=["stack", "summary"], choices=["stack", "summary", "poles", "zoom", "profiles"],
                    help="stack: spectra stacked in V; summary: table; poles: bound-state test; zoom: gap-region panels; profiles: |dm|,|ddelta| vs distance")
-    g.add_argument("--side", nargs="*", default=[], choices=["map", "dm", "dd"],
-                   help="extra panels beside every row of the stack: map = real-space STM difference maps (frozen and self-consistent) on the left; "
+    g.add_argument("--side", nargs="*", default=[], choices=["map", "spin", "mag", "dm", "dd"],
+                   help="extra panels beside every row of the stack: map = real-space STM difference maps (frozen and self-consistent) on the left; spin = the same maps for the spin difference rho_up - rho_down (spin-polarized STM); mag = energy-integrated tip-filtered spin density change over all occupied states; "
                         "dm / dd = site maps of the moment and hole-density change on the right")
     g.add_argument("--no_solve", action="store_true", help="do not solve anything, use what is already saved in ../data")
     g.add_argument("--no_frozen", action="store_true", help="(reserved) frozen curves are always drawn")
@@ -728,6 +763,9 @@ def main():
     g.add_argument("--half", type=int, default=6, help="half-size of the real-space map window (lattice constants)")
     g.add_argument("--sub", type=int, default=4, help="map pixels per lattice constant")
     g.add_argument("--site_half", type=int, default=6, help="half-size of the dm / dd site maps")
+    g.add_argument("--row_h", type=float, default=1.25, help="stack: height of one row in inches (map panels are squares of this size)")
+    g.add_argument("--spec_w", type=float, default=6.0, help="stack: width of the spectrum column in inches")
+    g.add_argument("--wspace", type=float, default=0.03, help="stack: horizontal gap between columns (fraction of a panel)")
     g = ap.add_argument_group("solvers")
     g.add_argument("--cluster", type=int, default=None, help="cluster half-width for the spectra (default: 4 for embed, 7 for finite)")
     g.add_argument("--solve_cluster", type=int, default=4, help="embed: cluster half-width of the self-consistency")
@@ -742,6 +780,7 @@ def main():
     g.add_argument("--maxiter_finite", type=int, default=14, help="finite: Newton steps per V")
     g.add_argument("--max_resid", type=float, default=None, help="largest residual accepted for plotting (default 1.5e-3 finite, 2*tol embed)")
     g.add_argument("--d_om", type=float, default=0.002, help="poles: energy step")
+    g.add_argument("--gap_thresh", type=float, default=0.01, help="poles: the gap region is where the clean host LDOS is below this fraction of its peak")
     g.add_argument("--lam_max", type=float, default=4.0, help="poles: largest scale factor for the margin")
     args = ap.parse_args()
     args.Vs = sorted(args.Vs)
@@ -760,7 +799,7 @@ def main():
         print("no self-consistent state for V =", ", ".join(f"{V:g}" for V in missing), "(frozen host only for those)")
     if not states:
         print("no self-consistent state available; only frozen curves will be drawn")
-    emb_c = SelfConsistentEmbedding(host, c=cl, Nk=256, n_mats=100, build_g0=False)
+    emb_c = SelfConsistentEmbedding(host, c=cl, Nk=256, n_mats=100, build_g0=("mag" in args.side))
     dhs = {V: emb_c.delta_h(states[V]["st"], V) for V in states}
     if "summary" in args.show and states:
         print_summary(args, host, states, dhs, emb_c)
