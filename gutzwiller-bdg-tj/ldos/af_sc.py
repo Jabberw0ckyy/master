@@ -730,6 +730,534 @@ def plot_profiles(args, host, states):
 
 
 # ====================================================================== main
+# ====================================================================== spin-resolved tips
+SPIN_TIPS = {"impurity (0,0)": (0.0, 0.0), "nn (1,0)": (1.0, 0.0), "nnn (1,1)": (1.0, 1.0), "bond (0.5,0)": (0.5, 0.0)}
+
+
+def tip_orbitals(mode, tips):
+    """tip name -> (positions, weights K, sublattice).  bare: the orbital centred at the tip (one site, a bond or a plaquette,
+    symmetric combination); wannier: the d-wave filter of the real tip."""
+    out = {}
+    for name, (x, y) in tips.items():
+        if mode == "wannier":
+            out[name] = neighborhood((x, y))
+            continue
+        xs_ = [int(np.floor(x))] if float(x).is_integer() else [int(np.floor(x)), int(np.floor(x)) + 1]
+        ys_ = [int(np.floor(y))] if float(y).is_integer() else [int(np.floor(y)), int(np.floor(y)) + 1]
+        pos = np.array([(a, b) for a in xs_ for b in ys_])
+        out[name] = (pos, np.full(len(pos), 1.0 / np.sqrt(len(pos))), (pos[:, 0] + pos[:, 1]) % 2)
+    return out
+
+
+def spin_spectra(host, perts, tipvecs, omegas, eta, Nk, c):
+    """rho_sigma(tip, omega) for sigma = up, dn; keys: 'clean' and every key of perts (dict of cluster dH)."""
+    prm = af.host_tb_params(host)
+    C_pos, C_a = cluster(c)
+    eye = np.eye(len(C_pos))
+    out = {k: {sp: {t: np.zeros(len(omegas)) for t in tipvecs} for sp in ("up", "dn")} for k in ["clean"] + list(perts)}
+    for n, om in enumerate(omegas):
+        for sp in ("up", "dn"):
+            gAA, gBB, gAB = af.host_green_real(prm, sp, om + 1j * eta, Nk)
+            G0CC = g0_pairs(C_pos, C_a, C_pos, C_a, gAA, gBB, gAB, Nk)
+            Ts = {k: np.linalg.solve(eye - d[sp] @ G0CC, d[sp]) for k, d in perts.items()}
+            for t, (pos, K, a) in tipvecs.items():
+                host_term = K @ g0_pairs(pos, a, pos, a, gAA, gBB, gAB, Nk) @ K
+                w = g0_pairs(pos, a, C_pos, C_a, gAA, gBB, gAB, Nk).T @ K
+                out["clean"][sp][t][n] = -host_term.imag / np.pi
+                for k, T in Ts.items():
+                    out[k][sp][t][n] = -(host_term + w @ T @ w).imag / np.pi
+    return out
+
+
+def spin_site_resolved(host, perts, omegas, eta, Nk, c):
+    """bare site-resolved: out['clean'][sp] = rho0_sigma(R, omega); out[k][sp] = Delta rho_sigma(R, omega); shape (n_omega, nC)."""
+    prm = af.host_tb_params(host)
+    C_pos, C_a = cluster(c)
+    nC = len(C_pos)
+    eye = np.eye(nC)
+    out = {k: {sp: np.zeros((len(omegas), nC)) for sp in ("up", "dn")} for k in ["clean"] + list(perts)}
+    for n, om in enumerate(omegas):
+        for sp in ("up", "dn"):
+            gAA, gBB, gAB = af.host_green_real(prm, sp, om + 1j * eta, Nk)
+            G = g0_pairs(C_pos, C_a, C_pos, C_a, gAA, gBB, gAB, Nk)
+            out["clean"][sp][n] = -np.diag(G).imag / np.pi
+            for k, d in perts.items():
+                T = np.linalg.solve(eye - d[sp] @ G, d[sp])
+                out[k][sp][n] = -((G @ T) * G.T).sum(axis=1).imag / np.pi
+    return out
+
+
+def _window_integral(om, y, baseline):
+    if baseline:
+        y = y - (y[0] + (y[-1] - y[0]) * (om - om[0]) / (om[-1] - om[0]))
+    return float((np.trapezoid if hasattr(np, "trapezoid") else np.trapz)(y, om))
+
+
+def analyse_peaks(args, om, sr, keys, labels, eps):
+    """peaks of the total change of the DOS; weight per spin and sublattice in the peak window; M_u, M_st."""
+    from scipy.signal import find_peaks
+    A = eps > 0
+    peaks = {}
+    print(f"\nSPIN CONTENT OF THE PEAKS  (bare sites of the cluster, window +-{args.peak_w:g}t around the peak, "
+          f"baseline {'not ' if args.no_baseline else ''}subtracted)")
+    print("  W = integral of Delta rho_sigma summed over the cluster sites, split into sublattice A (impurity) and B")
+    print("  M_u = W_up - W_dn (uniform, ferro-like);  M_st = (W_up^A - W_up^B) - (W_dn^A - W_dn^B) (staggered, AF-like)")
+    print(f"{'':>4}{'':>4} {'V':>5} {'peak':>7} | {'W_up^A':>8} {'W_up^B':>8} {'W_dn^A':>8} {'W_dn^B':>8} | {'M_u/W':>7} {'M_st/W':>7}")
+    for k in keys:
+        tot = (sr[k]["up"] + sr[k]["dn"]).sum(1)
+        pk, pr = find_peaks(tot, prominence=args.peak_prom * np.abs(tot).max())
+        pk = sorted(pk[np.argsort(-pr["prominences"])[:args.n_peaks]])
+        peaks[k] = [float(om[i]) for i in pk]
+        for i in pk:
+            sel = np.where(np.abs(om - om[i]) <= args.peak_w)[0]
+            o = om[sel]
+            q = {(sp, s): _window_integral(o, sr[k][sp][sel][:, m].sum(1), not args.no_baseline)
+                 for sp in ("up", "dn") for s, m in (("A", A), ("B", ~A))}
+            W = sum(q.values())
+            Mu = q[("up", "A")] + q[("up", "B")] - q[("dn", "A")] - q[("dn", "B")]
+            Ms = (q[("up", "A")] - q[("up", "B")]) - (q[("dn", "A")] - q[("dn", "B")])
+            print(f"{labels[k][0]:>4}{'':>4} {labels[k][1]:5.2f} {om[i]:7.3f} | {q[('up', 'A')]:8.4f} {q[('up', 'B')]:8.4f} "
+                  f"{q[('dn', 'A')]:8.4f} {q[('dn', 'B')]:8.4f} | {Mu / W:+7.2f} {Ms / W:+7.2f}")
+    return peaks
+
+
+def _cl_img(vec, c, half):
+    n = 2 * c + 1
+    h = min(half, c)
+    return vec.reshape(n, n).T[c - h:c + h + 1, c - h:c + h + 1], h
+
+
+def _arrow_panel(ax, X, Y, val, h, cm, title=None, arrow=0.75, acol="k"):
+    """one dot per lattice site coloured by val in [-1,1], arrow up/down with length ~ val; ring: black = sublattice A, grey = B."""
+    ok = np.isfinite(val)
+    A = (X + Y) % 2 == 0
+    ax.scatter(X[~ok], Y[~ok], s=8, c="0.8", zorder=1)
+    ax.scatter(X[ok], Y[ok], c=val[ok], cmap=cm, vmin=-1, vmax=1, s=120, zorder=2,
+               edgecolors=np.where(A[ok], "k", "0.6"), linewidths=np.where(A[ok], 1.2, 0.6))
+    ax.quiver(X[ok], Y[ok], np.zeros(ok.sum()), arrow * val[ok], angles="xy", scale_units="xy", scale=1, pivot="mid",
+              width=0.014, headwidth=3.2, headlength=3.8, headaxislength=3.2, color=acol, zorder=3)
+    ax.plot(0, 0, "r+", ms=9, mew=1.5, zorder=4)
+    ax.set_xlim(-h - .6, h + .6)
+    ax.set_ylim(-h - .6, h + .6)
+    ax.set_aspect("equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if title:
+        ax.set_title(title, fontsize=8)
+
+
+def run_spin_tips(args, host, states, dhs, emb_c):
+    import matplotlib.pyplot as plt
+    Vs = [V for V in (args.spin_Vs if args.spin_Vs else args.Vs) if V > 0 and V in dhs]
+    if not Vs:
+        print("spin_tips: no self-consistent state among the requested V")
+        return
+    c = emb_c.c
+    wmax = 1.0 if args.wmax is None else args.wmax
+    wmin = -wmax if args.wmin is None else args.wmin
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    tipvecs = tip_orbitals(args.spin_mode, SPIN_TIPS)
+    perts, labels = {}, {}
+    for V in Vs:
+        perts[f"fr{V:g}"], labels[f"fr{V:g}"] = frozen_delta_h(V, emb_c.pos), ("froz", V)
+        perts[f"sc{V:g}"], labels[f"sc{V:g}"] = dhs[V], ("SC", V)
+    eps = 1.0 - 2.0 * emb_c.sub
+    print(f"\nspin_tips: tips = {list(SPIN_TIPS)}, mode = {args.spin_mode}, cluster half-width {c}")
+    t0 = time.time()
+    om = np.linspace(wmin, wmax, args.n_omega)
+    sp = spin_spectra(host, perts, tipvecs, om, args.eta, args.Nk, c)
+    print(f"  tip spectra done ({time.time() - t0:.0f}s)")
+    pw = list(args.p_omegas) if args.p_omegas else []
+    lo2, hi2 = min([args.pmin] + [w - 0.02 for w in pw]), max([args.pmax] + [w + 0.02 for w in pw])
+    om2 = np.arange(lo2, hi2 + 1e-9, args.d_om_sp)
+    sr = spin_site_resolved(host, perts, om2, args.eta, args.Nk, c)
+    print(f"  site-resolved spectra done ({time.time() - t0:.0f}s)")
+
+    # ---- background of the clean host
+    m0 = host["m_i"] * sd.neel_sign
+    print(f"\nBACKGROUND (clean host, delta={args.delta:g}): staggered static moment (-1)^(x+y) m_i = {m0.mean():+.4f} on every site "
+          f"-> {'antiferromagnet' if abs(m0.mean()) > 1e-3 else 'no static order'}; neel_sign on the impurity site = {sd.neel_sign[SITE]:+.0f} "
+          f"(epsilon = +1 on the impurity sublattice A)")
+    for k0 in (args.pmin, 0.5 * (args.pmin + args.pmax), args.pmax):
+        i0 = int(np.argmin(np.abs(om2 - k0)))
+        rs = sr["clean"]["up"][i0] - sr["clean"]["dn"][i0]
+        rt = sr["clean"]["up"][i0] + sr["clean"]["dn"][i0]
+        print(f"   omega={om2[i0]:+.3f}: clean rho_s = rho_up - rho_dn: <rho_s>/<rho> = {rs.mean() / rt.mean():+.3f} (uniform part), "
+              f"<eps rho_s>/<rho> = {(eps * rs).mean() / rt.mean():+.3f} (staggered part)")
+
+    keys = [f"sc{V:g}" for V in Vs] + [f"fr{V:g}" for V in Vs]
+    peaks = analyse_peaks(args, om2, sr, keys, labels, eps)
+
+    names = list(SPIN_TIPS)
+    rows = Vs[::-1]
+    pos_txt = {k: f"{(k.split('(')[1].rstrip(')'))}" for k in names}
+
+    def frame(nr, nc, w, h, **kw):
+        return plt.subplots(nr, nc, figsize=(w * nc, h * nr), squeeze=False, **kw)
+
+    # ---- fig 1: rho_up, rho_dn
+    fig, axs = frame(len(rows), len(names), 3.0, 1.7, sharex=True)
+    for r, V in enumerate(rows):
+        for j, t in enumerate(names):
+            ax = axs[r, j]
+            ax.plot(om, sp["clean"]["up"][t], color="salmon", ls=":", lw=1)
+            ax.plot(om, sp["clean"]["dn"][t], color="lightskyblue", ls=":", lw=1)
+            ax.plot(om, sp[f"sc{V:g}"]["up"][t], color="tab:red", lw=1.3, label=r"$\rho_\uparrow$ SC")
+            ax.plot(om, sp[f"sc{V:g}"]["dn"][t], color="tab:blue", lw=1.3, label=r"$\rho_\downarrow$ SC")
+            for pe in peaks.get(f"sc{V:g}", []):
+                ax.axvline(pe, color="0.6", lw=0.6, ls="--")
+            ax.set_yticks([])
+            if j == 0:
+                ax.set_ylabel(f"V={V:g}t", fontsize=8)
+            if r == 0:
+                ax.set_title(t, fontsize=9)
+    axs[0, 0].legend(fontsize=6, loc="upper left")
+    for ax in axs[-1]:
+        ax.set_xlabel(r"bias $\omega/t$")
+    fig.suptitle(rf"spin-resolved LDOS ({args.spin_mode} tip), $\delta={args.delta:g}$, $T={args.T:g}$, $\eta={args.eta:g}$; dotted: clean host", fontsize=9)
+    fig.tight_layout()
+    fn = os.path.join(_DATA_DIR, f"afsc_spin_rho_{args.spin_mode}_d{args.delta:.3f}_{stamp}.png")
+    fig.savefig(fn, dpi=140)
+    print("saved", fn)
+
+    # ---- fig 2: Delta rho_s ; fig 3: polarisation
+    for what in ("ds", "P"):
+        fig, axs = frame(len(rows), len(names), 3.0, 1.7, sharex=True)
+        for r, V in enumerate(rows):
+            for j, t in enumerate(names):
+                ax = axs[r, j]
+                s0 = sp["clean"]["up"][t] - sp["clean"]["dn"][t]
+                t0_ = sp["clean"]["up"][t] + sp["clean"]["dn"][t]
+                for key, st_ in ((f"sc{V:g}", dict(color="k", lw=1.3, label="self-consistent")), (f"fr{V:g}", dict(color="tab:blue", lw=1.0, ls="--", label="frozen"))):
+                    s = sp[key]["up"][t] - sp[key]["dn"][t]
+                    tt = sp[key]["up"][t] + sp[key]["dn"][t]
+                    if what == "ds":
+                        ax.plot(om, s - s0, **st_)
+                    else:
+                        ax.plot(om, np.where(tt > 0.03 * t0_.max(), s / np.maximum(tt, 1e-12), np.nan), **st_)
+                if what == "P":
+                    ax.plot(om, np.where(t0_ > 0.03 * t0_.max(), s0 / np.maximum(t0_, 1e-12), np.nan), color="tab:red", ls=":", lw=1, label="clean")
+                    ax.set_ylim(-1, 1)
+                ax.axhline(0, color="0.7", lw=0.5)
+                for pe in peaks.get(f"sc{V:g}", []):
+                    ax.axvline(pe, color="0.6", lw=0.6, ls="--")
+                if j == 0:
+                    ax.set_ylabel(f"V={V:g}t", fontsize=8)
+                if r == 0:
+                    ax.set_title(t, fontsize=9)
+        axs[0, 0].legend(fontsize=6, loc="upper left")
+        for ax in axs[-1]:
+            ax.set_xlabel(r"bias $\omega/t$")
+        ttl = r"$\Delta\rho_s=(\rho_\uparrow-\rho_\downarrow)_{\rm imp}-(\rho_\uparrow-\rho_\downarrow)_{\rm clean}$" if what == "ds" \
+            else r"polarisation $P=(\rho_\uparrow-\rho_\downarrow)/(\rho_\uparrow+\rho_\downarrow)$ (masked where the DOS is tiny)"
+        fig.suptitle(ttl + rf" ({args.spin_mode} tip), $\delta={args.delta:g}$", fontsize=9)
+        fig.tight_layout()
+        fn = os.path.join(_DATA_DIR, f"afsc_spin_{what}_{args.spin_mode}_d{args.delta:.3f}_{stamp}.png")
+        fig.savefig(fn, dpi=140)
+        print("saved", fn)
+
+    # ---- fig 4: site-resolved maps at the strongest peak of each row
+    cols = ["eps m (state)", r"clean $\rho_s$", r"$\Delta\rho_\uparrow$", r"$\Delta\rho_\downarrow$", r"$\Delta\rho_s$", r"$\epsilon\,\Delta\rho_s$"]
+    fig, axs = frame(len(rows), len(cols), 1.9, 1.9)
+    for r, V in enumerate(rows):
+        key = f"sc{V:g}"
+        if args.omega is not None:
+            wb = args.omega
+        elif peaks.get(key):
+            tot = (sr[key]["up"] + sr[key]["dn"]).sum(1)
+            wb = max(peaks[key], key=lambda w: tot[int(np.argmin(np.abs(om2 - w)))])
+        else:
+            wb = None
+        for j in range(len(cols)):
+            ax = axs[r, j]
+            if wb is None:
+                ax.axis("off")
+                continue
+            i0 = int(np.argmin(np.abs(om2 - wb)))
+            du, dd = sr[key]["up"][i0], sr[key]["dn"][i0]
+            if j == 0:
+                o = observables(host, states[V]["st"])
+                o["epsm"] = states[V]["st"]["m_i"] * sd.neel_sign
+                img = site_image(o, "epsm", min(args.half, c))
+                h = min(args.half, c)
+                cm = "viridis"
+                v0, v1 = np.nanmin(img), np.nanmax(img)
+            else:
+                vec = {1: sr["clean"]["up"][i0] - sr["clean"]["dn"][i0], 2: du, 3: dd, 4: du - dd, 5: eps * (du - dd)}[j]
+                img, h = _cl_img(vec, c, args.half)
+                v1 = np.abs(img).max()
+                v0, cm = -v1, "PRGn"
+            ax.imshow(img, extent=[-h - .5, h + .5] * 2, origin="lower", cmap=cm, vmin=v0, vmax=v1)
+            ax.plot(0, 0, "k+", ms=6)
+            _ax_off(ax)
+            ax.text(0.03, 0.95, f"max {v1:.3g}", transform=ax.transAxes, va="top", fontsize=6)
+            if j == 0:
+                ax.text(0.03, 0.05, rf"V={V:g}t, $\omega_b$={wb:+.3f}", transform=ax.transAxes, fontsize=7)
+            if r == 0:
+                ax.set_title(cols[j], fontsize=8)
+    fig.suptitle(rf"bare site-resolved spin maps at the strongest peak, $\delta={args.delta:g}$; eps = +1 on the impurity sublattice; "
+                 r"PRGn: green $>0$, purple $<0$, scale symmetric per panel", fontsize=8)
+    fig.tight_layout()
+    fn = os.path.join(_DATA_DIR, f"afsc_spin_maps_d{args.delta:.3f}_{stamp}.png")
+    fig.savefig(fn, dpi=140)
+    print("saved", fn)
+
+    # ---- fig 5: polarisation map P(R, omega) = rho_s / rho at the peak energies (bare sites)
+    prows = []
+    for V in rows:
+        ws = pw if pw else ([args.omega] if args.omega is not None else peaks.get(f"sc{V:g}", []))
+        prows += [(V, w) for w in ws]
+    if prows:
+        pcols = [r"$\rho(R)$ SC", r"$P$ clean", r"$P$ frozen", r"$P$ SC", r"$\Delta P$ (SC $-$ clean)"]
+        cmP = plt.get_cmap("PRGn").copy()
+        cmP.set_bad("0.85")
+        spots = [("(0,0)", 0, 0), ("(1,0)", 1, 0), ("(1,1)", 1, 1), ("(2,0)", 2, 0)]
+        idx = {nm: int(np.where((emb_c.pos[:, 0] == x) & (emb_c.pos[:, 1] == y))[0][0]) for nm, x, y in spots}
+        blk = (np.abs(emb_c.pos[:, 0]) <= 1) & (np.abs(emb_c.pos[:, 1]) <= 1)
+        print(f"\nPOLARISATION P = (rho_up - rho_dn)/(rho_up + rho_dn) at the peak energies (bare sites; masked where rho < {args.p_mask:g} x mean clean DOS)")
+        print(f"{'V':>5} {'omega':>6} {'host':>6} | " + " ".join(f"{nm:>7}" for nm in idx) + " | 3x3 block")
+        store = []
+        saved = []
+        fig, axs = frame(len(prows), len(pcols), 1.9, 1.9)
+        for r, (V, wb) in enumerate(prows):
+            i0 = int(np.argmin(np.abs(om2 - wb)))
+            u0, d0 = sr["clean"]["up"][i0], sr["clean"]["dn"][i0]
+            thr = args.p_mask * (u0 + d0).mean()
+            res = {}
+            for nm, kk in (("clean", None), ("froz", f"fr{V:g}"), ("SC", f"sc{V:g}")):
+                u = u0 + (sr[kk]["up"][i0] if kk else 0.0)
+                d = d0 + (sr[kk]["dn"][i0] if kk else 0.0)
+                t = u + d
+                res[nm] = (np.where(t > thr, (u - d) / np.maximum(t, 1e-12), np.nan), t, (u - d), u, d)
+                Pb = (u - d)[blk].sum() / max(t[blk].sum(), 1e-12)
+                print(f"{V:5.2f} {om2[i0]:6.3f} {nm:>6} | " + " ".join(f"{res[nm][0][i]:+7.2f}" for i in idx.values()) + f" | {Pb:+.2f}")
+            dP = res["SC"][0] - res["clean"][0]
+            store.append((V, om2[i0], res))
+            rowimgs = []
+            panels = [(res["SC"][1], "viridis", 0, None), (res["clean"][0], cmP, -1, 1), (res["froz"][0], cmP, -1, 1), (res["SC"][0], cmP, -1, 1), (dP, cmP, None, None)]
+            for j, (vec, cm, lo, hi) in enumerate(panels):
+                ax = axs[r, j]
+                img, h = _cl_img(vec, c, args.half)
+                rowimgs.append(img)
+                if j == 0:
+                    lo, hi = 0, np.nanmax(img)
+                elif j == 4:
+                    hi = np.nanmax(np.abs(img)) if np.isfinite(img).any() else 1
+                    lo = -hi
+                ax.imshow(img, extent=[-h - .5, h + .5] * 2, origin="lower", cmap=cm, vmin=lo, vmax=hi)
+                ax.plot(0, 0, "k+", ms=6)
+                _ax_off(ax)
+                if j in (0, 4):
+                    ax.text(0.03, 0.95, f"max {hi:.3g}", transform=ax.transAxes, va="top", fontsize=6)
+                if j == 0:
+                    ax.text(0.03, 0.05, rf"V={V:g}t, $\omega$={om2[i0]:+.3f}", transform=ax.transAxes, fontsize=7)
+                if r == 0:
+                    ax.set_title(pcols[j], fontsize=8)
+            saved.append(dict(V=float(V), w=float(om2[i0]), h=int(h), imgs=rowimgs))
+        fig.suptitle(rf"polarisation map $P(R,\omega)$ on the bare sites, $\delta={args.delta:g}$; PRGn: green $=+1$ ($\uparrow$), purple $=-1$ ($\downarrow$), "
+                     "grey: DOS too small", fontsize=8)
+        fig.tight_layout()
+        fn = os.path.join(_DATA_DIR, f"afsc_spin_Pmap_d{args.delta:.3f}_{stamp}.png")
+        fig.savefig(fn, dpi=140)
+        print("saved", fn)
+        fn = os.path.join(_DATA_DIR, f"afsc_pmap_rows_d{args.delta:.3f}.pkl")
+        with open(fn, "wb") as f:
+            pickle.dump(dict(delta=args.delta, rows=saved), f)
+        print("saved rows for the combined figure:", fn)
+
+        # ---- fig 6: the same on the lattice: one dot + arrow per site (order: staggered arrows = AF, uniform = FM)
+        h = min(args.p_half, c)
+        X, Y = emb_c.pos[:, 0], emb_c.pos[:, 1]
+        win = (np.abs(X) <= h) & (np.abs(Y) <= h)
+        m0 = abs((host["m_i"] * sd.neel_sign).mean())
+        fig, axs = frame(len(store), 4, 2.5, 2.5)
+        for r, (V, wv, res) in enumerate(store):
+            o = observables(host, states[V]["st"])
+            sel = (np.abs(o["dx"]) <= h) & (np.abs(o["dy"]) <= h)
+            _arrow_panel(axs[r, 0], o["dx"][sel], o["dy"][sel], np.asarray(states[V]["st"]["m_i"])[sel] / m0, h, cmP,
+                         r"static moment $m_i/m_0$" if r == 0 else None, acol="w")
+            for j, nm in enumerate(("clean", "froz", "SC")):
+                _arrow_panel(axs[r, j + 1], X[win], Y[win], res[nm][0][win], h, cmP, rf"$P$ {nm}" if r == 0 else None)
+            axs[r, 0].set_ylabel(rf"V={V:g}t, $\omega$={wv:+.3f}", fontsize=8)
+        fig.suptitle(rf"order on the lattice, $\delta={args.delta:g}$: dot colour and arrow = polarisation (green/up $=+1$); "
+                     r"black ring: sublattice A (impurity at red +), grey ring: B; first column: static moment of the state", fontsize=8)
+        fig.tight_layout()
+        fn = os.path.join(_DATA_DIR, f"afsc_spin_Porder_d{args.delta:.3f}_{stamp}.png")
+        fig.savefig(fn, dpi=140)
+        print("saved", fn)
+
+
+def run_spin_stack(args, host, dhs, emb_c):
+    """stack in V (like the density/magnetisation stacks): P maps (frozen, self-consistent) + spin-resolved spectra, clean only in the V=0 row"""
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+    Vs_all = sorted(set(args.Vs))
+    Vs = [V for V in Vs_all if V == 0 or V in dhs]
+    miss = [V for V in Vs_all if V not in Vs]
+    if miss:
+        print("spin_stack: no self-consistent state for V =", miss, "(skipped)")
+    Vp = [V for V in Vs if V > 0]
+    if not Vp:
+        print("spin_stack: no V > 0 available")
+        return
+    c = emb_c.c
+    full = {"imp": "impurity (0,0)", "nn": "nn (1,0)", "nnn": "nnn (1,1)", "bond": "bond (0.5,0)"}
+    tips = {full[k]: SPIN_TIPS[full[k]] for k in args.stack_tips}
+    tipvecs = tip_orbitals(args.spin_mode, tips)
+    perts, labels = {}, {}
+    for V in Vp:
+        perts[f"fr{V:g}"] = frozen_delta_h(V, emb_c.pos)
+        perts[f"sc{V:g}"], labels[f"sc{V:g}"] = dhs[V], ("SC", V)
+    eps = 1.0 - 2.0 * emb_c.sub
+    wmax = 1.0 if args.wmax is None else args.wmax
+    wmin = -wmax if args.wmin is None else args.wmin
+    ref = args.p_omegas[0] if args.p_omegas else args.p_track
+    lo2 = args.pmin if ref is None else min(args.pmin, ref - 0.06)
+    hi2 = args.pmax if ref is None else max(args.pmax, ref + 0.06)
+    t0 = time.time()
+    om = np.linspace(wmin, wmax, args.n_omega)
+    sp = spin_spectra(host, perts, tipvecs, om, args.eta, args.Nk, c)
+    om2 = np.arange(lo2, hi2 + 1e-9, args.d_om_sp)
+    sr = spin_site_resolved(host, perts, om2, args.eta, args.Nk, c)
+    print(f"spin_stack: spectra and maps computed ({time.time() - t0:.0f}s)")
+    peaks = analyse_peaks(args, om2, sr, [f"sc{V:g}" for V in Vp], labels, eps)
+
+    def energy(V):
+        if args.p_omegas:
+            return args.p_omegas[0]
+        pk = peaks.get(f"sc{V:g}", [])
+        if args.p_track is not None:
+            near = [w for w in pk if abs(w - args.p_track) <= args.p_tol]
+            return min(near, key=lambda w: abs(w - args.p_track)) if near else args.p_track
+        if pk:
+            tot = (sr[f"sc{V:g}"]["up"] + sr[f"sc{V:g}"]["dn"]).sum(1)
+            return max(pk, key=lambda w: tot[int(np.argmin(np.abs(om2 - w)))])
+        return 0.5 * (args.pmin + args.pmax)
+
+    wrow = {V: energy(V) for V in Vp}
+    wrow[0] = ref if ref is not None else wrow[min(Vp)]
+    cmP = plt.get_cmap("PRGn").copy()
+    cmP.set_bad("0.85")
+    rows = [V for V in Vs[::-1]]
+    nr, nt = len(rows), len(tips)
+    ymax = {t: 1.05 * max(max(sp[k][s][t].max() for s in ("up", "dn")) for k in sp) for t in tips}
+    fig = plt.figure(figsize=(3 * 1.55 + nt * 2.7 + 0.5, 1.55 * nr))
+    gs = GridSpec(nr, 3 + nt, figure=fig, width_ratios=[1, 1, 1] + [1.8] * nt, wspace=0.14, hspace=0.1)
+    print(f"\nmap energies per row: " + ", ".join(f"V={V:g}: {wrow[V]:+.3f}" for V in rows))
+    for r, V in enumerate(rows):
+        i0 = int(np.argmin(np.abs(om2 - wrow[V])))
+        u0, d0 = sr["clean"]["up"][i0], sr["clean"]["dn"][i0]
+        thr = args.p_mask * (u0 + d0).mean()
+
+        def Pof(du, dd):
+            u, d = u0 + du, d0 + dd
+            t = u + d
+            return np.where(t > thr, (u - d) / np.maximum(t, 1e-12), np.nan), t
+
+        if V == 0:
+            Pc, tc = Pof(0.0, 0.0)
+            panels = [(tc, "viridis", 0, None), (Pc, cmP, -1, 1), (Pc, cmP, -1, 1)]
+        else:
+            Pf, tf = Pof(sr[f"fr{V:g}"]["up"][i0], sr[f"fr{V:g}"]["dn"][i0])
+            Ps, ts = Pof(sr[f"sc{V:g}"]["up"][i0], sr[f"sc{V:g}"]["dn"][i0])
+            panels = [(ts, "viridis", 0, None), (Pf, cmP, -1, 1), (Ps, cmP, -1, 1)]
+        for j, (vec, cm, lo, hi) in enumerate(panels):
+            ax = fig.add_subplot(gs[r, j])
+            img, h = _cl_img(vec, c, args.half)
+            if j == 0:
+                hi = np.nanmax(img)
+            ax.imshow(img, extent=[-h - .5, h + .5] * 2, origin="lower", cmap=cm, vmin=lo, vmax=hi)
+            ax.plot(0, 0, "k+", ms=6)
+            _ax_off(ax)
+            if j == 0:
+                ax.text(0.03, 0.95, f"max {hi:.3g}", transform=ax.transAxes, va="top", fontsize=6, color="w")
+                ax.text(0.03, 0.04, rf"$\omega$={om2[i0]:+.3f}", transform=ax.transAxes, fontsize=7, color="k",
+                        bbox=dict(fc="w", ec="none", alpha=0.75, pad=1.2))
+            if r == 0:
+                ax.set_title([r"$\rho(R)$ " + ("SC" if V else "clean"), r"$P$ frozen", r"$P$ SC"][j], fontsize=8)
+        for k, t in enumerate(tips):
+            ax = fig.add_subplot(gs[r, 3 + k])
+            if V == 0:
+                ax.plot(om, sp["clean"]["up"][t], color="tab:red", lw=1.2)
+                ax.plot(om, sp["clean"]["dn"][t], color="tab:blue", lw=1.2)
+            else:
+                ax.plot(om, sp[f"fr{V:g}"]["up"][t], color="tab:red", lw=0.8, ls="--", alpha=0.7)
+                ax.plot(om, sp[f"fr{V:g}"]["dn"][t], color="tab:blue", lw=0.8, ls="--", alpha=0.7)
+                ax.plot(om, sp[f"sc{V:g}"]["up"][t], color="tab:red", lw=1.2)
+                ax.plot(om, sp[f"sc{V:g}"]["dn"][t], color="tab:blue", lw=1.2)
+            ax.axvline(om2[i0], color="0.45", lw=0.8, ls="--")
+            ax.set_xlim(wmin, wmax)
+            ax.set_ylim(0, ymax[t])
+            ax.set_yticks([])
+            ax.tick_params(labelbottom=(r == nr - 1), labelsize=7)
+            if r == 0:
+                ax.set_title(t, fontsize=8)
+            if k == nt - 1:
+                ax.text(0.97, 0.88, "clean" if V == 0 else f"V={V:g}t", transform=ax.transAxes, ha="right", fontsize=8)
+            if r == nr - 1:
+                ax.set_xlabel(r"bias $\omega/t$", fontsize=8)
+    if r == 0 or True:
+        from matplotlib.lines import Line2D
+        fig.legend([Line2D([0], [0], color="tab:red"), Line2D([0], [0], color="tab:blue"),
+                    Line2D([0], [0], color="0.3", ls="--", lw=0.8)], [r"$\rho_\uparrow$", r"$\rho_\downarrow$", "frozen (thin)"],
+                   loc="lower left", bbox_to_anchor=(0.01, 0.0), fontsize=7, ncol=3, frameon=False)
+    how = (f"peak near {args.p_track:g}" if args.p_track is not None and not args.p_omegas else
+           (f"fixed energy {args.p_omegas[0]:g}" if args.p_omegas else "strongest peak of each row"))
+    fig.suptitle(rf"polarisation maps $P(R,\omega)$ {args.spin_mode} sites, $\delta={args.delta:g}$, map energy {how}; ", fontsize=7.5, y=0.995)
+    fig.subplots_adjust(top=0.90, bottom=0.07, left=0.01, right=0.995)
+    tag = f"w{args.p_track:g}" if args.p_track is not None and not args.p_omegas else ("fixed" if args.p_omegas else "auto")
+    fn = os.path.join(_DATA_DIR, f"afsc_spin_stack_d{args.delta:.3f}_{tag}_{time.strftime('%Y%m%d-%H%M%S')}.png")
+    fig.savefig(fn, dpi=150)
+    print("saved", fn)
+
+
+def combine_pmaps(args):
+    """stack the P-map rows saved by earlier spin_tips runs (one pkl per delta) into one figure"""
+    import matplotlib.pyplot as plt
+    rows = []
+    for d in args.combine_deltas:
+        fn = os.path.join(_DATA_DIR, f"afsc_pmap_rows_d{d:.3f}.pkl")
+        if not os.path.exists(fn):
+            print("missing", fn, "-> run --show spin_tips for this delta first")
+            continue
+        with open(fn, "rb") as f:
+            data = pickle.load(f)
+        sel = [r for r in data["rows"] if args.combine_V is None or abs(r["V"] - args.combine_V) < 1e-9]
+        rows += [(d, r) for r in sorted(sel, key=lambda r: (r["V"], r["w"]))]
+    if not rows:
+        return
+    cm = plt.get_cmap("PRGn").copy()
+    cm.set_bad("0.85")
+    cols = [r"$\rho(R)$ SC", r"$P$ clean", r"$P$ frozen", r"$P$ SC", r"$\Delta P$ (SC $-$ clean)"]
+    fig, axs = plt.subplots(len(rows), 5, figsize=(1.9 * 5, 1.9 * len(rows)), squeeze=False)
+    for r, (d, row) in enumerate(rows):
+        h = row["h"]
+        for j in range(5):
+            ax = axs[r, j]
+            img = row["imgs"][j]
+            if j == 0:
+                lo, hi, cmap = 0, np.nanmax(img), "viridis"
+            elif j == 4:
+                hi = np.nanmax(np.abs(img)) if np.isfinite(img).any() else 1
+                lo, cmap = -hi, cm
+            else:
+                lo, hi, cmap = -1, 1, cm
+            ax.imshow(img, extent=[-h - .5, h + .5] * 2, origin="lower", cmap=cmap, vmin=lo, vmax=hi)
+            ax.plot(0, 0, "k+", ms=6)
+            _ax_off(ax)
+            if j in (0, 4):
+                ax.text(0.03, 0.95, f"max {hi:.3g}", transform=ax.transAxes, va="top", fontsize=6)
+            if j == 0:
+                ax.text(0.03, 0.05, rf"$\delta$={d:g}, V={row['V']:g}t, $\omega$={row['w']:+.3f}", transform=ax.transAxes, fontsize=7, color="k", bbox=dict(fc="w", ec="none", alpha=0.75, pad=1.5))
+            if r == 0:
+                ax.set_title(cols[j], fontsize=8)
+    fig.suptitle(r"polarisation map $P(R,\omega)$ on the bare sites; PRGn: green $=+1$ ($\uparrow$), purple $=-1$ ($\downarrow$), grey: DOS too small", fontsize=8)
+    fig.tight_layout()
+    fn = os.path.join(_DATA_DIR, f"afsc_spin_Pmap_combined_{time.strftime('%Y%m%d-%H%M%S')}.png")
+    fig.savefig(fn, dpi=150)
+    print("saved", fn)
+
+
 def main():
     ap = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -741,8 +1269,8 @@ def main():
                    help="embed: self-consistent cluster inside the infinite clean host; "
                         "finite: full 24x24 lattice, Newton-Krylov")
     g = ap.add_argument_group("what to draw")
-    g.add_argument("--show", nargs="+", default=["stack", "summary"], choices=["stack", "summary", "poles", "zoom", "profiles"],
-                   help="stack: spectra stacked in V; summary: table; poles: bound-state test; zoom: gap-region panels; profiles: |dm|,|ddelta| vs distance")
+    g.add_argument("--show", nargs="+", default=["stack", "summary"], choices=["stack", "summary", "poles", "zoom", "profiles", "spin_tips", "spin_stack", "pmap_combine"],
+                   help="spin_tips: spin-resolved tips and magnetic character of the peaks; stack: spectra stacked in V; summary: table; poles: bound-state test; zoom: gap-region panels; profiles: |dm|,|ddelta| vs distance")
     g.add_argument("--side", nargs="*", default=[], choices=["map", "spin", "mag", "dm", "dd"],
                    help="extra panels beside every row of the stack: map = real-space STM difference maps (frozen and self-consistent) on the left; spin = the same maps for the spin difference rho_up - rho_down (spin-polarized STM); mag = energy-integrated tip-filtered spin density change over all occupied states; "
                         "dm / dd = site maps of the moment and hole-density change on the right")
@@ -766,6 +1294,22 @@ def main():
     g.add_argument("--row_h", type=float, default=1.25, help="stack: height of one row in inches (map panels are squares of this size)")
     g.add_argument("--spec_w", type=float, default=6.0, help="stack: width of the spectrum column in inches")
     g.add_argument("--wspace", type=float, default=0.03, help="stack: horizontal gap between columns (fraction of a panel)")
+    g = ap.add_argument_group("spin_tips")
+    g.add_argument("--spin_mode", choices=["bare", "wannier"], default="bare", help="bare: orbital centred at the tip (site/bond), wannier: d-wave filtered tip")
+    g.add_argument("--spin_Vs", type=float, nargs="*", default=None, help="V rows for spin_tips (default: --Vs)")
+    g.add_argument("--peak_w", type=float, default=0.03, help="half-width of the energy window around a peak")
+    g.add_argument("--n_peaks", type=int, default=2, help="number of peaks analysed per state")
+    g.add_argument("--peak_prom", type=float, default=0.1, help="peak prominence relative to the largest total DOS change")
+    g.add_argument("--d_om_sp", type=float, default=0.004, help="energy step of the site-resolved calculation (window pmin..pmax)")
+    g.add_argument("--p_half", type=int, default=4, help="half-width (lattice constants) of the lattice order view")
+    g.add_argument("--stack_tips", nargs="+", choices=["imp", "nn", "nnn", "bond"], default=["imp", "nn"], help="spin_stack: tips of the spectra panels")
+    g.add_argument("--p_track", type=float, default=None, help="spin_stack: follow the peak closest to this energy in every row")
+    g.add_argument("--p_tol", type=float, default=0.05, help="spin_stack: max distance of the followed peak from --p_track")
+    g.add_argument("--p_omegas", type=float, nargs="*", default=None, help="energies of the P-map rows (default: the strongest peaks)")
+    g.add_argument("--combine_deltas", type=float, nargs="*", default=[0.05, 0.10, 0.15], help="pmap_combine: dopings to stack")
+    g.add_argument("--combine_V", type=float, default=None, help="pmap_combine: use only this V")
+    g.add_argument("--p_mask", type=float, default=0.1, help="polarisation map: mask sites with rho < p_mask x mean clean DOS")
+    g.add_argument("--no_baseline", action="store_true", help="do not subtract a linear baseline in the peak windows")
     g = ap.add_argument_group("solvers")
     g.add_argument("--cluster", type=int, default=None, help="cluster half-width for the spectra (default: 4 for embed, 7 for finite)")
     g.add_argument("--solve_cluster", type=int, default=4, help="embed: cluster half-width of the self-consistency")
@@ -783,6 +1327,9 @@ def main():
     g.add_argument("--gap_thresh", type=float, default=0.01, help="poles: the gap region is where the clean host LDOS is below this fraction of its peak")
     g.add_argument("--lam_max", type=float, default=4.0, help="poles: largest scale factor for the margin")
     args = ap.parse_args()
+    if "pmap_combine" in args.show:
+        combine_pmaps(args)
+        return
     args.Vs = sorted(args.Vs)
     if args.max_resid is None:
         args.max_resid = 1.5e-3
@@ -811,6 +1358,10 @@ def main():
         plot_zoom(args, host, states, dhs, emb_c)
     if "profiles" in args.show and states:
         plot_profiles(args, host, states)
+    if "spin_tips" in args.show and states:
+        run_spin_tips(args, host, states, dhs, emb_c)
+    if "spin_stack" in args.show and states:
+        run_spin_stack(args, host, dhs, emb_c)
 
 
 if __name__ == "__main__":
